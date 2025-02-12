@@ -1,0 +1,603 @@
+import os
+import re
+import json
+from colorama import Fore, Style, init
+
+# Initialize colorama for colorful output
+init(autoreset=True)
+
+CONFIG_FILE = "directories.json"
+
+# ===============================
+# Directory & Config Functions
+# ===============================
+
+def get_directories():
+    """
+    Return the required directories with predefined paths:
+      1. Gun Skins: /storage/emulated/0/DARK_OBB/GUN_SKIN/
+      2. Hit Effect: /storage/emulated/0/DARK_OBB/HIT_EFFECT/
+      3. Lootbox: /storage/emulated/0/DARK_OBB/LOOTBOX_DATS/
+      4. Icon: /storage/emulated/0/DARK_OBB/ICON_MOD/
+      5. Repack (destination folder): /storage/emulated/0/DARK_OBB/REPACK_OBB/
+      6. Skin Index file path (used only for icon modding): /storage/emulated/0/DARK_OBB/GUN_SKIN/TXT/skin_index.txt
+    """
+    dirs = {
+        "gun_skins": "/storage/emulated/0/DARK_OBB/GUN_SKIN/",
+        "hit_effect": "/storage/emulated/0/DARK_OBB/HIT_EFFECT/",
+        "lootbox": "/storage/emulated/0/DARK_OBB/LOOTBOX_DATS/",
+        "icon": "/storage/emulated/0/DARK_OBB/ICON_MOD/",
+        "repack": "/storage/emulated/0/DARK_OBB/REPACK_OBB/",
+        "skin_index": "/storage/emulated/0/DARK_OBB/GUN_SKIN/TXT/skin_index.txt"
+    }
+    return dirs
+
+def save_directories(dirs):
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(dirs, f, indent=4)
+        print(Fore.GREEN + f"✅ Saved directories to '{CONFIG_FILE}'.")
+    except Exception as e:
+        print(Fore.RED + f"❌ Error saving directories: {e}")
+
+def load_directories():
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r') as f:
+                data = json.load(f)
+            required = ["gun_skins", "hit_effect", "lootbox", "icon", "repack", "skin_index"]
+            if all(k in data for k in required):
+                return data
+        return None
+    except Exception as e:
+        print(Fore.RED + f"❌ Error loading directories: {e}")
+        return None
+
+# ===============================
+# Gun Data Functions
+# ===============================
+
+def read_guns_file(txt_file):
+    """Read guns.txt and return a list of gun entries."""
+    try:
+        with open(txt_file, 'r') as f:
+            lines = f.readlines()
+        guns = []
+        for line in lines:
+            parts = line.strip().split(" | ")
+            if len(parts) >= 3:
+                guns.append({
+                    "id": parts[0],
+                    "hex": parts[1].lower(),  # normalize to lowercase
+                    "name": parts[2]
+                })
+        return guns
+    except Exception as e:
+        print(Fore.RED + f"❌ Error reading {txt_file}: {e}")
+        return []
+
+def find_matching_guns(guns, query):
+    """Return a list of guns whose names match the query (case-insensitive)."""
+    query = query.lower()
+    return [gun for gun in guns if query in gun["name"].lower()]
+
+# ===============================
+# Helper Function for Gun Decoration
+# ===============================
+def decorate_gun_name(gun):
+    name = gun['name']
+    match = re.search(r'\(Lv\. ?(\d+)\)', name)
+    if match:
+        level = int(match.group(1))
+        # Define custom color and emoji per level (1-8)
+        level_colors = {
+            1: Fore.RED, 2: Fore.MAGENTA, 3: Fore.YELLOW, 4: Fore.CYAN,
+            5: Fore.LIGHTRED_EX, 6: Fore.LIGHTMAGENTA_EX, 7: Fore.LIGHTYELLOW_EX, 8: Fore.LIGHTCYAN_EX
+        }
+        level_emojis = {
+            1: "🔥", 2: "😈", 3: "💀", 4: "👹",
+            5: "🤘", 6: "⚡", 7: "☠️", 8: "🥶"
+        }
+        color = level_colors.get(level, Fore.WHITE)
+        emoji = level_emojis.get(level, "")
+        return f"{color}{name} {emoji}{Style.RESET_ALL}"
+    else:
+        return f"{Fore.WHITE}{name}{Style.RESET_ALL}"
+
+# ===============================
+# Skin Index Parsing & Fuzzy Matching
+# ===============================
+
+def parse_skin_index_file(file_path):
+    """
+    Parse the skin index text file and return a dictionary mapping gun names to index hex.
+    Expected format:
+      ### Category (e.g., ### AKM)
+      Gun Name (Lv. X) - index
+    """
+    index_dict = {}
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            current_category = None
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("###"):
+                    current_category = line[3:].strip()
+                else:
+                    if " - " in line:
+                        name_part, idx_part = line.rsplit(" - ", 1)
+                        gun_name = name_part.strip()
+                        index_hex = idx_part.strip().lower()
+                        index_dict[gun_name.lower()] = index_hex
+        print(Fore.GREEN + f"✅ Parsed skin index file '{file_path}' with {len(index_dict)} entries.")
+    except Exception as e:
+        print(Fore.RED + f"❌ Error parsing skin index file '{file_path}': {e}")
+    return index_dict
+
+def normalize_gun_name(name):
+    """
+    Normalize a gun name by converting to lower case and removing hyphens,
+    parentheses, commas, periods, apostrophes, and extra spaces.
+    """
+    name = name.lower()
+    for ch in ["-", "(", ")", ",", ".", "'"]:
+        name = name.replace(ch, " ")
+    return " ".join(name.split())
+
+def get_skin_index_for_gun(skin_index_dict, gun_name):
+    """
+    Perform a fuzzy matching on the gun name to find a skin index in the dictionary.
+    Returns the first matching index hex if found, otherwise None.
+    """
+    norm_gun = normalize_gun_name(gun_name)
+    for key, value in skin_index_dict.items():
+        norm_key = normalize_gun_name(key)
+        if norm_gun in norm_key or norm_key in norm_gun:
+            return value
+    return None
+
+# ===============================
+# Hex and Index Functions
+# ===============================
+
+def replace_index(file_path, source_index_hex, target_index_hex):
+    """Replace the source index hex with the target index hex."""
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read().hex()
+        data = data.replace(source_index_hex, target_index_hex)
+        with open(file_path, 'wb') as f:
+            f.write(bytes.fromhex(data))
+        print(Fore.GREEN + f"✅ Replaced index hex '{source_index_hex}' -> '{target_index_hex}' in file '{file_path}'.")
+    except Exception as e:
+        print(Fore.RED + f"❌ Error replacing index hex in file '{file_path}': {e}")
+
+def replace_hex(file_path, source_hex, target_hex):
+    """Replace all occurrences of source_hex with target_hex in the file."""
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read().hex()
+        data = data.replace(source_hex.replace(" ", ""), target_hex.replace(" ", ""))
+        with open(file_path, 'wb') as f:
+            f.write(bytes.fromhex(data))
+        print(Fore.GREEN + f"✅ Replaced hex '{source_hex}' -> '{target_hex}' in '{os.path.basename(file_path)}'.")
+    except Exception as e:
+        print(Fore.RED + f"❌ Error replacing hex in file '{file_path}': {e}")
+
+# ===============================
+# File Copying Function (Strictly copy files containing source_hex or target_hex)
+# ===============================
+
+def copy_files_to_repack_mod(mod_type, src_dir, repack_folder, condition_hexes, file_modtype_map):
+    """
+    From the given mod source folder (src_dir), copy files that contain any of the
+    condition_hexes into the repack_folder. The file name is kept as is.
+    Updates file_modtype_map with mod_type for each copied file.
+    Returns a list of the new file names.
+    """
+    files_copied = []
+    for file_name in os.listdir(src_dir):
+        src_file_path = os.path.join(src_dir, file_name)
+        if not os.path.isfile(src_file_path):
+            continue
+        dest_file_path = os.path.join(repack_folder, file_name)
+        if os.path.exists(dest_file_path):
+            if file_name not in file_modtype_map:
+                file_modtype_map[file_name] = mod_type
+            continue
+        try:
+            with open(src_file_path, "rb") as f:
+                data = f.read().hex()
+        except Exception:
+            continue
+        if not any(hex_val in data for hex_val in condition_hexes):
+            continue
+        with open(src_file_path, "rb") as src, open(dest_file_path, "wb") as dst:
+            dst.write(src.read())
+        files_copied.append(file_name)
+        file_modtype_map[file_name] = mod_type
+    if files_copied:
+        print(Fore.GREEN + f"✅ Copied {len(files_copied)} file(s) from {mod_type} into repack folder.")
+    else:
+        print(Fore.YELLOW + f"ℹ️ No new files copied from {mod_type}.")
+    return files_copied
+
+# ===============================
+# Modding Functions for Each Part
+# ===============================
+
+# --- Revert Gun Skins Modding to Previous (Directory-based) Script ---
+def revert_mod_gun_skin_files(file_paths, source_hex, target_hex):
+    """
+    For Gun Skins modding (reverted version):
+      Among the given file_paths (which are from the gun_skins source), first search for a file that
+      contains source_hex to extract the "long hex" (i.e. up to 10 hex characters preceding source_hex plus source_hex).
+      Then, for each file in file_paths, replace every occurrence of target_hex (with at least 10 preceding hex characters)
+      with the extracted long hex.
+    Returns a tuple: (list of log messages, list of modified file names)
+    """
+    log_msgs = []
+    modified_files = []
+    source_long = None
+    # Extract source_long from the first file that contains source_hex.
+    for file_path in file_paths:
+        try:
+            with open(file_path, "rb") as f:
+                data = f.read().hex()
+            pos_source = data.find(source_hex)
+            if pos_source != -1:
+                available = 10 if pos_source >= 10 else pos_source
+                source_long = data[pos_source - available : pos_source + len(source_hex)]
+                print(Fore.GREEN + f"✅ [Gun Skins] Extracted 'long hex' from '{os.path.basename(file_path)}': {source_long}")
+                break
+        except Exception as e:
+            print(Fore.RED + f"❌ Error reading file '{os.path.basename(file_path)}': {e}")
+    if source_long is None:
+        print(Fore.YELLOW + f"⚠️ [Gun Skins] Source hex '{source_hex}' not found in any file.")
+        return None, []
+    total_replacements = 0
+    for file_path in file_paths:
+        try:
+            with open(file_path, "rb") as f:
+                data = f.read().hex()
+            replacements = []
+            for m in re.finditer(re.escape(target_hex), data):
+                pos = m.start()
+                if pos < 10:
+                    continue
+                replacements.append((pos - 10, pos + len(target_hex)))
+            if replacements:
+                new_data = data
+                for start, end in sorted(replacements, key=lambda x: x[0], reverse=True):
+                    new_data = new_data[:start] + source_long + new_data[end:]
+                total_replacements += 1
+                with open(file_path, "wb") as f:
+                    f.write(bytes.fromhex(new_data))
+                msg = f"[Gun Skins] {os.path.basename(file_path)}: replaced {len(replacements)} occurrence(s) using long hex '{source_long}'."
+                print(Fore.GREEN + "✅ " + msg)
+                log_msgs.append(msg)
+                modified_files.append(os.path.basename(file_path))
+        except Exception as e:
+            print(Fore.RED + f"❌ Error processing file '{os.path.basename(file_path)}': {e}")
+    if total_replacements > 0:
+        return log_msgs, modified_files
+    else:
+        print(Fore.YELLOW + f"⚠️ [Gun Skins] No valid occurrences of target hex '{target_hex}' found in any file.")
+        return None, []
+
+def mod_hit_effect_file(file_path, source_hex, target_hex):
+    """
+    For Hit Effect modding:
+      Replace all occurrences of source_hex with target_hex.
+    Returns a log message if any replacement is done, else None.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read().hex()
+        if source_hex not in data:
+            return None
+        new_data = data.replace(source_hex, target_hex)
+        if new_data == data:
+            return None
+        with open(file_path, "wb") as f:
+            f.write(bytes.fromhex(new_data))
+        msg = f"[Hit Effect] {os.path.basename(file_path)}: replaced hex '{source_hex}' with '{target_hex}'."
+        print(Fore.GREEN + "✅ " + msg)
+        return msg
+    except Exception as e:
+        print(Fore.RED + f"❌ Error in Hit Effect mod for '{os.path.basename(file_path)}': {e}")
+        return None
+
+def mod_lootbox_file(file_path, source_hex, target_hex):
+    """
+    For Lootbox modding:
+      Replace all occurrences of source_hex with target_hex.
+    Returns a log message if modified, else None.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read().hex()
+        if source_hex not in data:
+            return None
+        new_data = data.replace(source_hex, target_hex)
+        if new_data == data:
+            return None
+        with open(file_path, "wb") as f:
+            f.write(bytes.fromhex(new_data))
+        msg = f"[Lootbox] {os.path.basename(file_path)}: replaced hex '{source_hex}' with '{target_hex}'."
+        print(Fore.GREEN + "✅ " + msg)
+        return msg
+    except Exception as e:
+        print(Fore.RED + f"❌ Error in Lootbox mod for '{os.path.basename(file_path)}': {e}")
+        return None
+
+def mod_icon_file(file_path, source_hex, target_hex, source_index_hex, target_index_hex):
+    """
+    For Icon modding:
+      Process only if the file contains source_hex.
+      For every occurrence of source_hex, mark a zone covering the 50 hex bytes (100 characters)
+      immediately preceding that occurrence. Replace occurrences of source_index_hex with target_index_hex
+      only if they appear within one of those zones. Then replace all occurrences of source_hex with target_hex.
+    Returns a log message if modifications were made, else None.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read().hex()
+        if source_hex not in data:
+            # Do not print any message when skipping
+            return None
+        intervals = []
+        for match in re.finditer(re.escape(source_hex), data):
+            pos = match.start()
+            start_interval = max(0, pos - 100)
+            intervals.append((start_interval, pos))
+        def replace_index_if_in_zone(match):
+            pos = match.start()
+            for start, end in intervals:
+                if start <= pos < end:
+                    return target_index_hex
+            return match.group(0)
+        new_data = re.sub(re.escape(source_index_hex), replace_index_if_in_zone, data)
+        new_data = new_data.replace(source_hex, target_hex)
+        if new_data == data:
+            return None
+        with open(file_path, "wb") as f:
+            f.write(bytes.fromhex(new_data))
+        msg = (f"[Icon] {os.path.basename(file_path)}: replaced source index (within 50 hex bytes before source hex) "
+               f"with '{target_index_hex}' and replaced source hex '{source_hex}' with '{target_hex}'.")
+        print(Fore.GREEN + "✅ " + msg)
+        return msg
+    except Exception as e:
+        print(Fore.RED + f"❌ Error in Icon mod for '{os.path.basename(file_path)}': {e}")
+        return None
+
+# ===============================
+# Main Function
+# ===============================
+
+def main():
+    print(Style.BRIGHT + Fore.GREEN + "\n🎮 Game Skin Modding Tool Starting...\n")
+
+    # Get directories or load config.
+    dirs = load_directories()
+    if not dirs:
+        dirs = get_directories()
+        save_directories(dirs)
+    else:
+        print(Fore.GREEN + "✅ Loaded saved directories from config.")
+
+    # Set the path for guns.txt (located in /storage/emulated/0/DARK_OBB/GUN_SKIN/TXT/)
+    txt_file = "/storage/emulated/0/DARK_OBB/GUN_SKIN/TXT/guns.txt"
+    if not os.path.exists(txt_file):
+        print(Fore.RED + "❌ Error: 'guns.txt' not found at the specified location!")
+        return
+
+    guns = read_guns_file(txt_file)
+    if not guns:
+        print(Fore.RED + "❌ No gun entries found in 'guns.txt'.")
+        return
+
+    # Parse skin index file (used only for icon modding)
+    skin_index_path = dirs.get("skin_index")
+    skin_index_dict = {}
+    if skin_index_path and os.path.exists(skin_index_path):
+        skin_index_dict = parse_skin_index_file(skin_index_path)
+    else:
+        print(Fore.RED + "❌ Skin Index file not found. Icon modding will not work properly.")
+
+    repack_folder = dirs["repack"]
+    if not os.path.exists(repack_folder):
+        os.makedirs(repack_folder, exist_ok=True)
+
+    global_changelog = []
+
+    # Map file names (in repack folder) to their mod type.
+    file_modtype_map = {}
+
+    # Outer loop for modding multiple skins.
+    while True:
+        # Load existing changelog or initialize an empty one.
+        changelog_path = os.path.join(repack_folder, "changelog.txt")
+        if os.path.exists(changelog_path):
+            try:
+                with open(changelog_path, "r", encoding="utf-8") as f:
+                    global_changelog = f.read().split("\n\n")
+            except Exception as e:
+                print(Fore.RED + f"❌ Error reading changelog: {e}")
+                global_changelog = []
+        else:
+            global_changelog = []
+
+        # Extract file names from the changelog.
+        changelog_files = set()
+        for entry in global_changelog:
+            match = re.search(r"\[(.+?)\]\s+(\S+):", entry)
+            if match:
+                file_name = match.group(2)
+                changelog_files.add(file_name)
+
+        # Clear repack folder at start of new session, but preserve files in changelog.
+        for file_name in os.listdir(repack_folder):
+            file_path = os.path.join(repack_folder, file_name)
+            if file_name == "changelog.txt":  # Ensure changelog.txt is never removed
+                continue
+            if file_name not in changelog_files and os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                    print(Fore.GREEN + f"🗑 Removed unedited file '{file_name}' from repack folder.")
+                except Exception as e:
+                    print(Fore.RED + f"❌ Error removing file '{file_name}': {e}")
+
+        file_modtype_map.clear()
+
+        # Prompt for source and target guns.
+        while True:
+            print(Fore.CYAN + "\n🔍 Select Source and Target Guns 🔍\n")
+            source_query = input("🎯 Enter the name of the source gun: ").strip()
+            source_matches = find_matching_guns(guns, source_query)
+            if not source_matches:
+                print(Fore.RED + "❌ No matching source guns found. Try again.")
+                continue
+            print(Fore.YELLOW + "\nMatching source guns:")
+            for i, gun in enumerate(source_matches):
+                # Use decorated gun name with color and emojis
+                print(f"  {i+1}. {decorate_gun_name(gun)} ({gun['hex']})")
+            try:
+                source_choice = int(input("👉 Choose the source gun by number: ")) - 1
+                source_gun = source_matches[source_choice]
+            except Exception:
+                print(Fore.RED + "❌ Invalid choice. Try again.")
+                continue
+
+            target_query = input("\n🎯 Enter the name of the target gun: ").strip()
+            target_matches = find_matching_guns(guns, target_query)
+            if not target_matches:
+                print(Fore.RED + "❌ No matching target guns found. Try again.")
+                continue
+            print(Fore.YELLOW + "\nMatching target guns:")
+            for i, gun in enumerate(target_matches):
+                print(f"  {i+1}. {decorate_gun_name(gun)} ({gun['hex']})")
+            try:
+                target_choice = int(input("👉 Choose the target gun by number: ")) - 1
+                target_gun = target_matches[target_choice]
+            except Exception:
+                print(Fore.RED + "❌ Invalid choice. Try again.")
+                continue
+
+            source_hex = source_gun['hex']
+            target_hex = target_gun['hex']
+
+            # Special handling for Hit Effect modding: Replace Default with Hit Effect version
+            target_hex_hit = target_hex  # Default to the original target_hex
+            if target_gun["name"].startswith("Default"):
+                base_name = target_gun["name"].replace("Default", "").strip()
+                hit_effect_gun = None
+                for gun in guns:
+                    if "Hit effect" in gun["name"] and base_name in gun["name"]:
+                        hit_effect_gun = gun
+                        break
+                if hit_effect_gun:
+                    print(Fore.GREEN + f"✅ Target gun is 'Default'. Using Hit Effect version: {decorate_gun_name(hit_effect_gun)} ({hit_effect_gun['hex']})")
+                    target_hex_hit = hit_effect_gun["hex"]  # Update target_hex_hit for Hit Effect modding
+                else:
+                    print(Fore.YELLOW + f"⚠️ Could not find Hit Effect version for '{target_gun['name']}'. Using Default version.")
+
+            print(Fore.GREEN + f"\n🔍 Selected Source: {decorate_gun_name(source_gun)} ({source_hex})")
+            print(Fore.GREEN + f"🔍 Selected Target: {decorate_gun_name(target_gun)} ({target_hex})\n")
+            break
+
+        # For Hit Effect modding: if the source gun is leveled, use the level 5 hex.
+        source_hex_hit = source_hex
+        if "Lv." in source_gun["name"]:
+            base_name = source_gun["name"].split(" (Lv.")[0].strip()
+            for gun in guns:
+                if base_name in gun["name"] and "(Lv. 5)" in gun["name"]:
+                    source_hex_hit = gun["hex"]
+                    print(Fore.GREEN + f"✅ Using level 5 hex for Hit Effect modding: {source_hex_hit}")
+                    break
+
+        # --- Copy files from each mod source folder into repack folder ---
+        mod_types = ["gun_skins", "hit_effect", "lootbox", "icon"]
+        for mod in mod_types:
+            src_dir = dirs.get(mod)
+            if not src_dir or not os.path.exists(src_dir):
+                print(Fore.RED + f"❌ Directory for {mod} not found. Skipping.")
+                continue
+            copy_files_to_repack_mod(mod, src_dir, repack_folder, [source_hex, target_hex], file_modtype_map)
+
+        # --- Process files in repack folder ---
+        modified_files = set()
+
+        # For gun_skins, revert to the previous (directory-based) modding function.
+        gun_skin_files = [os.path.join(repack_folder, f) for f, mod in file_modtype_map.items() if mod == "gun_skins"]
+        if gun_skin_files:
+            log_msgs, mod_files = revert_mod_gun_skin_files(gun_skin_files, source_hex, target_hex)
+            if log_msgs:
+                global_changelog.extend(log_msgs)
+                modified_files.update(mod_files)
+
+        # Process other mod types individually.
+        for file_name in os.listdir(repack_folder):
+            file_path = os.path.join(repack_folder, file_name)
+            if not os.path.isfile(file_path):
+                continue
+
+            # Skip gun_skins since we've already processed them.
+            if file_modtype_map.get(file_name) == "gun_skins":
+                continue
+
+            mod_type = file_modtype_map.get(file_name)
+            log_entry = None
+            if mod_type == "hit_effect":
+                log_entry = mod_hit_effect_file(file_path, source_hex_hit, target_hex_hit)
+            elif mod_type == "lootbox":
+                log_entry = mod_lootbox_file(file_path, source_hex, target_hex)
+            elif mod_type == "icon":
+                target_skin_index = get_skin_index_for_gun(skin_index_dict, target_gun["name"])
+                source_skin_index = get_skin_index_for_gun(skin_index_dict, source_gun["name"])
+                if target_skin_index is None or source_skin_index is None:
+                    print(Fore.RED + f"❌ Could not find skin index for file '{file_name}'. Skipping icon modding for this file.")
+                    continue
+                log_entry = mod_icon_file(file_path, source_hex, target_hex, source_skin_index, target_skin_index)
+            if log_entry:
+                global_changelog.append(log_entry)
+                modified_files.add(file_name)
+
+        # --- Cleanup: remove unedited files for mod types other than gun_skins ---
+        for file_name in os.listdir(repack_folder):
+            mod_type = file_modtype_map.get(file_name)
+            if mod_type is None:
+                continue
+            if mod_type != "gun_skins" and file_name not in modified_files and file_name not in changelog_files:
+                file_path = os.path.join(repack_folder, file_name)
+                try:
+                    os.remove(file_path)
+                    print(Fore.GREEN + f"🗑 Removed unedited file '{file_name}' from repack folder.")
+                except Exception as e:
+                    print(Fore.RED + f"❌ Error removing file '{file_name}': {e}")
+
+        # --- Save global changelog ---
+        if global_changelog:
+            try:
+                with open(changelog_path, "w", encoding="utf-8") as f:
+                    f.write("\n\n".join(global_changelog))
+                print(Fore.GREEN + "\n🎉 Modding complete. Changelog saved at:")
+                print(f"   {changelog_path}\n")
+                print("\n".join(global_changelog))
+            except Exception as e:
+                print(Fore.RED + f"❌ Error writing changelog: {e}")
+        else:
+            print(Fore.YELLOW + "\n⚠️ No changes were made.")
+
+        # --- Ask if user wants to mod more skins ---
+        choice = input("\n🔄 Do you want to mod more skins? (y/n): ").strip().lower()
+        if choice not in ("y", "yes"):
+            print(Fore.GREEN + "👋 Exiting the tool. Goodbye!")
+            break
+        else:
+            print(Fore.CYAN + "🔄 Starting a new modding session...\n")
+
+if __name__ == "__main__":
+    main()
